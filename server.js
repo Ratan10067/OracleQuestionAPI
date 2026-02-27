@@ -20,7 +20,7 @@ const DATA_DIR = process.env.DATA_DIR || './data';
 const QUESTIONS_DIR = path.join(DATA_DIR, 'questions');
 
 // Allowed file upload folders (extend this list as needed)
-const ALLOWED_FOLDERS = ['profileimages', 'resumes'];
+const ALLOWED_FOLDERS = ['profileimages', 'resumes', 'expereincesresumes'];
 
 // Ensure data directories exist
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -57,7 +57,7 @@ const fileUpload = multer({
       if (!file.mimetype.startsWith('image/')) {
         return cb(new Error('Only image files are allowed for profile images'), false);
       }
-    } else if (folder === 'resumes') {
+    } else if (folder === 'resumes' || folder === 'expereincesresumes') {
       if (!file.mimetype.startsWith('image/') && file.mimetype !== 'application/pdf') {
         return cb(new Error('Only images and PDFs are allowed for resumes'), false);
       }
