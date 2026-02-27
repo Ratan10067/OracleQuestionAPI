@@ -1,7 +1,7 @@
 /**
- * Oracle Question Storage API
+ * Oracle Storage API
  * 
- * Stores and serves question data (including test cases) as JSON files.
+ * Stores and serves question data (JSON) and uploaded files (images, resumes, etc.).
  * This runs on your Oracle instance and is accessed by the main CodeMaze backend.
  */
 
@@ -10,6 +10,8 @@ const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
+const multer = require('multer');
+const { v4: uuidv4 } = require('uuid');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -17,9 +19,52 @@ const API_KEY = process.env.API_KEY || 'codemaze_oracle_secret_2025';
 const DATA_DIR = process.env.DATA_DIR || './data';
 const QUESTIONS_DIR = path.join(DATA_DIR, 'questions');
 
+// Allowed file upload folders (extend this list as needed)
+const ALLOWED_FOLDERS = ['profileimages', 'resumes'];
+
 // Ensure data directories exist
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 if (!fs.existsSync(QUESTIONS_DIR)) fs.mkdirSync(QUESTIONS_DIR, { recursive: true });
+ALLOWED_FOLDERS.forEach(folder => {
+  const dir = path.join(DATA_DIR, folder);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+});
+
+// --- Multer config for file uploads ---
+const fileStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const folder = req.params.folder;
+    const dir = path.join(DATA_DIR, folder);
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname);
+    const uniqueName = `${uuidv4()}${ext}`;
+    cb(null, uniqueName);
+  }
+});
+
+const fileUpload = multer({
+  storage: fileStorage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+  fileFilter: (req, file, cb) => {
+    const folder = req.params.folder;
+    if (!ALLOWED_FOLDERS.includes(folder)) {
+      return cb(new Error(`Folder '${folder}' is not allowed`), false);
+    }
+    // For profileimages: only images; for resumes: images + PDFs
+    if (folder === 'profileimages') {
+      if (!file.mimetype.startsWith('image/')) {
+        return cb(new Error('Only image files are allowed for profile images'), false);
+      }
+    } else if (folder === 'resumes') {
+      if (!file.mimetype.startsWith('image/') && file.mimetype !== 'application/pdf') {
+        return cb(new Error('Only images and PDFs are allowed for resumes'), false);
+      }
+    }
+    cb(null, true);
+  }
+});
 
 // Middleware
 app.use(cors());
@@ -265,16 +310,103 @@ app.post('/questions/bulk', requireApiKey, (req, res) => {
 });
 
 // =============================================================================
+// FILE UPLOAD ROUTES (Profile Images, Resumes, etc.)
+// =============================================================================
+
+// UPLOAD a file to a folder (requires API key)
+app.post('/files/:folder', requireApiKey, (req, res) => {
+  fileUpload.single('file')(req, res, (err) => {
+    if (err) {
+      const status = err instanceof multer.MulterError ? 400 : 400;
+      return res.status(status).json({ error: err.message });
+    }
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
+
+    const folder = req.params.folder;
+    const filename = req.file.filename;
+    const fileUrl = `${req.protocol}://${req.get('host')}/files/${folder}/${filename}?apiKey=${API_KEY}`;
+
+    console.log(`[UPLOAD] ${folder}/${filename} (${(req.file.size / 1024).toFixed(1)}KB)`);
+    res.status(201).json({
+      success: true,
+      data: {
+        url: fileUrl,
+        filename,
+        folder,
+        size: req.file.size,
+        mimetype: req.file.mimetype
+      }
+    });
+  });
+});
+
+// SERVE a file from a folder (requires API key)
+app.get('/files/:folder/:filename', requireApiKey, (req, res) => {
+  const { folder, filename } = req.params;
+  if (!ALLOWED_FOLDERS.includes(folder)) {
+    return res.status(400).json({ error: 'Invalid folder' });
+  }
+
+  // Sanitize filename to prevent path traversal
+  const safeName = path.basename(filename);
+  const filePath = path.join(DATA_DIR, folder, safeName);
+
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ error: 'File not found' });
+  }
+
+  res.sendFile(path.resolve(filePath));
+});
+
+// DELETE a file (requires API key)
+app.delete('/files/:folder/:filename', requireApiKey, (req, res) => {
+  const { folder, filename } = req.params;
+  if (!ALLOWED_FOLDERS.includes(folder)) {
+    return res.status(400).json({ error: 'Invalid folder' });
+  }
+
+  const safeName = path.basename(filename);
+  const filePath = path.join(DATA_DIR, folder, safeName);
+
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ error: 'File not found' });
+  }
+
+  fs.unlinkSync(filePath);
+  console.log(`[DELETE] ${folder}/${safeName}`);
+  res.json({ success: true, message: 'File deleted' });
+});
+
+// LIST files in a folder (requires API key)
+app.get('/files/:folder', requireApiKey, (req, res) => {
+  const { folder } = req.params;
+  if (!ALLOWED_FOLDERS.includes(folder)) {
+    return res.status(400).json({ error: 'Invalid folder' });
+  }
+
+  const folderPath = path.join(DATA_DIR, folder);
+  const files = fs.readdirSync(folderPath).map(f => ({
+    filename: f,
+    url: `${req.protocol}://${req.get('host')}/files/${folder}/${f}`,
+    size: fs.statSync(path.join(folderPath, f)).size
+  }));
+
+  res.json({ success: true, count: files.length, data: files });
+});
+
+// =============================================================================
 // START SERVER
 // =============================================================================
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`
 ╔════════════════════════════════════════════════════════════╗
-║       Oracle Question Storage API                          ║
+║       Oracle Storage API                                   ║
 ║       Running on port ${PORT}                                  ║
 ╠════════════════════════════════════════════════════════════╣
-║  Endpoints:                                                ║
+║  Question Endpoints:                                       ║
 ║    GET  /health              - Health check                ║
 ║    GET  /questions           - List all questions          ║
 ║    GET  /questions/:id       - Get question by ID          ║
@@ -284,6 +416,13 @@ app.listen(PORT, '0.0.0.0', () => {
 ║    PUT  /questions/:id       - Update question (API key)   ║
 ║    DELETE /questions/:id     - Delete question (API key)   ║
 ║    POST /questions/bulk      - Bulk import (API key)       ║
+║                                                            ║
+║  File Upload Endpoints:                                    ║
+║    POST   /files/:folder            - Upload file          ║
+║    GET    /files/:folder/:filename  - Serve file           ║
+║    DELETE /files/:folder/:filename  - Delete file          ║
+║    GET    /files/:folder            - List files           ║
+║  Folders: ${ALLOWED_FOLDERS.join(', ').padEnd(47)}║
 ╚════════════════════════════════════════════════════════════╝
   `);
 });
