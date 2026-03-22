@@ -27,6 +27,11 @@ const ALLOWED_FOLDERS = [
   "testcases",
   "questionimages",
   "blogs",
+  "general",
+  "avatars",
+  "misc",
+  "mcq-images",
+  "mcq-questions"
 ];
 
 // Ensure data directories exist
@@ -437,6 +442,41 @@ app.get("/files/:folder", requireApiKey, (req, res) => {
   }));
 
   res.json({ success: true, count: files.length, data: files });
+});
+
+// LIST all files across folders (requires API key)
+app.get("/files", requireApiKey, (req, res) => {
+  const { folder = "all" } = req.query;
+  const foldersToScan = folder === "all" ? ALLOWED_FOLDERS : [folder];
+  
+  if (folder !== "all" && !ALLOWED_FOLDERS.includes(folder)) {
+    return res.status(400).json({ error: "Invalid folder" });
+  }
+
+  let allFiles = [];
+  foldersToScan.forEach(f => {
+    const dirPath = path.join(DATA_DIR, f);
+    if (fs.existsSync(dirPath)) {
+      const files = fs.readdirSync(dirPath).map(file => {
+        const stats = fs.statSync(path.join(dirPath, file));
+        // Use base64 ID to safely pass it in URLs
+        const safeId = Buffer.from(`${f}/${file}`).toString("base64");
+        return {
+          _id: safeId,
+          name: file,
+          folder: f,
+          url: `${req.protocol}://${req.get("host")}/files/${f}/${file}?apiKey=${API_KEY}`,
+          size: stats.size,
+          createdAt: stats.birthtime,
+          fileType: file.endsWith(".json") ? "application/json" : "image" // rough guess
+        };
+      });
+      allFiles.push(...files);
+    }
+  });
+
+  allFiles.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  res.json({ success: true, count: allFiles.length, data: allFiles });
 });
 
 // =============================================================================
