@@ -26,6 +26,7 @@ const ALLOWED_FOLDERS = [
   "expereincesresumes",
   "testcases",
   "questionimages",
+  "blogs",
 ];
 
 // Ensure data directories exist
@@ -60,7 +61,7 @@ const fileUpload = multer({
       return cb(new Error(`Folder '${folder}' is not allowed`), false);
     }
     // For profileimages: only images; for resumes: images + PDFs
-    if (folder === "profileimages" || folder === "questionimages") {
+    if (folder === "profileimages" || folder === "questionimages" || folder === "blogs") {
       if (!file.mimetype.startsWith("image/")) {
         return cb(
           new Error("Only image files are allowed for this folder"),
